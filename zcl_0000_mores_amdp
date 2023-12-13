@@ -1,0 +1,79 @@
+CLASS zcl_0000_mores_amdp DEFINITION
+  PUBLIC
+  FINAL
+  CREATE PUBLIC .
+
+PUBLIC SECTION.
+    INTERFACES: if_amdp_marker_hdb.
+
+    TYPES: BEGIN OF ts_data_mores
+         ,   bukrs     TYPE zt0000_mores-bukrs
+         ,   gjahr     TYPE zt0000_mores-gjahr
+         ,   otype     TYPE zt0000_mores-otype
+         ,   zmo       TYPE zt0000_mores-zmo
+         ,   zmo_rev   TYPE zt0000_mores-zmo_rev
+         ,   gjahr_rev TYPE zt0000_mores-gjahr_rev
+         , END OF ts_data_mores
+         , tt_data_mores TYPE STANDARD TABLE OF ts_data_mores
+                         WITH NON-UNIQUE SORTED KEY sort
+                         COMPONENTS bukrs gjahr otype zmo.
+
+    CLASS-METHODS: get_mores_rev
+                   AMDP OPTIONS CDS SESSION CLIENT current
+                   CHANGING VALUE(ct_data) TYPE tt_data_mores.
+PROTECTED SECTION.
+PRIVATE SECTION.
+ENDCLASS.
+
+
+
+CLASS zcl_0163_mores_amdp IMPLEMENTATION.
+
+    METHOD get_mores_rev BY DATABASE PROCEDURE
+                         FOR HDB LANGUAGE SQLSCRIPT
+                         OPTIONS READ-ONLY
+                         USING zt0000_mores.
+
+      lt_hier = SELECT *
+                    FROM HIERARCHY(
+                            SOURCE( SELECT CONCAT( zmo    , gjahr )     AS parent_id,
+                                           CONCAT( zmo_rev, gjahr_rev ) AS node_id
+                                        FROM zt0000_mores
+                                        WHERE mandt    = session_context( 'CLIENT' )
+                                          AND zmo     <> '' )
+                            START WHERE ( bukrs, gjahr, otype, zmo )
+                                     IN ( SELECT bukrs, gjahr, otype, zmo
+                                            FROM :ct_data )
+                            NO CACHE
+                         );
+
+      lt_hier_desc = SELECT *
+                         FROM HIERARCHY_DESCENDANTS(
+                                SOURCE :lt_hier
+                                START ( SELECT hierarchy_parent_rank AS start_rank,
+                                               parent_id             AS start_id
+                                            FROM :lt_hier )
+                              )
+                         WHERE start_rank          = 0
+                           AND hierarchy_tree_size = 1;
+
+      ct_data = SELECT ct.bukrs,
+                       ct.gjahr,
+                       ct.otype,
+                       ct.zmo,
+                       CASE WHEN des.parent_id IS NOT NULL
+                            THEN CAST ( LEFT ( des.parent_id, 10 ) AS char(10) )
+                            ELSE ct.zmo_rev
+                       END AS zmo_rev,
+                       CASE WHEN des.parent_id IS NOT NULL
+                            THEN CAST ( SUBSTRING ( des.parent_id, 11, 4 ) AS char(4) )
+                            ELSE ct.gjahr_rev
+                       END AS gjahr_rev
+                    FROM :ct_data AS ct
+                         LEFT JOIN :lt_hier_desc AS des
+                                ON LEFT ( des.start_id, 10 )         = ct.zmo
+                               AND SUBSTRING ( des.start_id, 11, 4 ) = ct.gjahr;
+
+    ENDMETHOD.
+
+ENDCLASS.
